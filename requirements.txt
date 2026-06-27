@@ -1,0 +1,4 @@
+reactpy==1.1.0
+starlette==0.36.3
+uvicorn==0.49.0
+aiosqlite==0.22.1
