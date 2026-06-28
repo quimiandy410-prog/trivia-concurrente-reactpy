@@ -245,6 +245,30 @@ def TablaPuntajes():
         html.tbody(filas),
     )
 
+@component
+def HistorialEventos():
+    """
+    Muestra el log de eventos de la partida actual en tiempo real.
+    Se suscribe al estado igual que los demas componentes reactivos.
+    """
+    _, forzar_render = use_state(0)
+
+    def suscribirse():
+        def notificar():
+            forzar_render(lambda n: n + 1)
+        _suscriptores.append(notificar)
+        return lambda: _suscriptores.remove(notificar)
+
+    use_effect(suscribirse, [])
+
+    eventos = list(reversed(_estado_actual.historial_eventos[-8:]))
+    items = [html.li({"key": str(i)}, ev) for i, ev in enumerate(eventos)]
+
+    return html.div(
+        {"style": {"marginTop": "1.5rem", "backgroundColor": "#f5f5f5", "padding": "10px", "borderRadius": "8px"}},
+        html.h4("📜 Historial de eventos (últimos 8)"),
+        html.ul({"style": {"fontSize": "0.85rem"}}, items) if items else html.p("Sin eventos aún."),
+    )
 
 @component
 def App():
@@ -290,6 +314,8 @@ def App():
         Cronometro(),
         Pregunta(jugador_id),
         TablaPuntajes(),
+        HistorialEventos(),
+        RankingGlobal(),
     )
 
 
