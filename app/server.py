@@ -246,6 +246,7 @@ def TablaPuntajes():
     )
 
 @component
+<<<<<<< HEAD
 def HistorialEventos():
     """
     Muestra el log de eventos de la partida actual en tiempo real.
@@ -268,6 +269,47 @@ def HistorialEventos():
         {"style": {"marginTop": "1.5rem", "backgroundColor": "#f5f5f5", "padding": "10px", "borderRadius": "8px"}},
         html.h4("📜 Historial de eventos (últimos 8)"),
         html.ul({"style": {"fontSize": "0.85rem"}}, items) if items else html.p("Sin eventos aún."),
+=======
+def RankingGlobal():
+    """
+    Muestra el Top 10 histórico leído de la BD (ranking_global).
+    Es una lectura async no bloqueante: usa use_effect + asyncio
+    para no congelar el render mientras consulta la base de datos.
+    """
+    ranking, set_ranking = use_state([])
+
+    def cargar_ranking():
+        async def consultar():
+            datos = await P.obtener_ranking_top(10)
+            set_ranking(datos)
+        asyncio.ensure_future(consultar())
+
+    use_effect(cargar_ranking, [])
+
+    filas = [
+        html.tr(
+            {"key": r["nombre"] + str(i)},
+            html.td(f"#{i + 1}"),
+            html.td(r["nombre"]),
+            html.td(str(r["puntaje"])),
+            html.td(str(r["partidas"])),
+        )
+        for i, r in enumerate(ranking)
+    ]
+
+    return html.div(
+        {"style": {"marginTop": "2rem", "borderTop": "2px solid #ccc", "paddingTop": "1rem"}},
+        html.h3("🏆 Ranking Global Histórico"),
+        html.table(
+            {"style": {"width": "100%", "borderCollapse": "collapse"}},
+            html.thead(
+                html.tr(
+                    html.th("Pos."), html.th("Jugador"), html.th("Puntaje Acumulado"), html.th("Partidas")
+                )
+            ),
+            html.tbody(filas),
+        ) if ranking else html.p("Aún no hay partidas registradas en el ranking."),
+>>>>>>> 865acc3f210b09288cef863930faad243314807a
     )
 
 @component
@@ -275,11 +317,14 @@ def App():
     jugador_id, set_jugador_id = use_state(None)
     nombre_input, set_nombre_input = use_state("")
 
-    async def iniciar_corrutinas_una_vez():
-        # Lanza las corrutinas autonomas solo una vez (al primer montaje de App)
+    def iniciar_corrutinas_una_vez():
         asyncio.create_task(iniciar_corrutinas_autonomas())
-
-    use_effect(lambda: asyncio.ensure_future(iniciar_corrutinas_una_vez()), [])
+        
+    def efecto():
+        iniciar_corrutinas_una_vez()
+        return None
+    
+    use_effect(efecto, [])
 
     if jugador_id is None:
         def manejar_input(e):
@@ -314,9 +359,13 @@ def App():
         Cronometro(),
         Pregunta(jugador_id),
         TablaPuntajes(),
+<<<<<<< HEAD
         HistorialEventos(),
+=======
+>>>>>>> 865acc3f210b09288cef863930faad243314807a
         RankingGlobal(),
     )
+
 
 
 # ---------------------------------------------------------------------------
