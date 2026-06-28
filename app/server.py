@@ -130,7 +130,25 @@ def Pregunta(jugador_id):
     if _estado_actual.juego_terminado:
         ganador = max(_estado_actual.jugadores, key=lambda j: j.puntaje, default=None)
         texto_ganador = f"🏆 Ganador: {ganador.nombre} ({ganador.puntaje} pts)" if ganador else "Sin jugadores"
-        return html.div({"style": {"fontSize": "1.5rem"}}, texto_ganador)
+
+        async def reiniciar(_event):
+            await despachar(E.ACCION_REINICIAR, {})
+
+        return html.div(
+            {"style": {"fontSize": "1.5rem", "textAlign": "center"}},
+            html.p(texto_ganador),
+            html.button(
+                {
+                    "onClick": reiniciar,
+                    "style": {
+                        "marginTop": "12px", "padding": "10px 20px", "fontSize": "1rem",
+                        "cursor": "pointer", "backgroundColor": "#0f3460", "color": "white",
+                        "border": "none", "borderRadius": "6px",
+                    },
+                },
+                "🔄 Jugar de nuevo",
+            ),
+        )
 
     p = _estado_actual.pregunta_actual
     jugador = next((j for j in _estado_actual.jugadores if j.id == jugador_id), None)
@@ -255,15 +273,6 @@ def App():
     jugador_id, set_jugador_id = use_state(None)
     nombre_input, set_nombre_input = use_state("")
 
-    def iniciar_corrutinas_una_vez():
-        asyncio.create_task(iniciar_corrutinas_autonomas())
-
-    def efecto():
-        iniciar_corrutinas_una_vez()
-        return None
-
-    use_effect(efecto, [])
-
     if jugador_id is None:
         def manejar_input(e):
             set_nombre_input(e["target"]["value"])
@@ -306,9 +315,25 @@ app = Starlette()
 configure(app, App)
 
 
+# ---------------------------------------------------------------------------
+# ARRANQUE DEL SERVIDOR
+# ---------------------------------------------------------------------------
+# Las corrutinas autonomas se lanzan UNA SOLA VEZ aqui, en el evento de
+# arranque del proceso (no dentro de App ni de ningun otro componente).
+# El flag _corrutinas_ya_iniciadas es una proteccion extra: garantiza
+# que, pase lo que pase, jamas se lancen duplicados.
+# ---------------------------------------------------------------------------
+
+_corrutinas_ya_iniciadas = False
+
+
 @app.on_event("startup")
 async def al_iniciar():
+    global _corrutinas_ya_iniciadas
     await P.inicializar_bd()
+    if not _corrutinas_ya_iniciadas:
+        _corrutinas_ya_iniciadas = True
+        asyncio.create_task(iniciar_corrutinas_autonomas())
 
 
 if __name__ == "__main__":

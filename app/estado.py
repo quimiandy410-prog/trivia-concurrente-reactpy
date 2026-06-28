@@ -76,6 +76,7 @@ ACCION_TICK = "TICK"                 # generado por la corrutina temporizador
 ACCION_CERRAR_RONDA = "CERRAR_RONDA"  # generado por inactividad/tiempo agotado
 ACCION_NUEVA_PREGUNTA = "NUEVA_PREGUNTA"  # generado por corrutina de refresco
 ACCION_PENALIZAR = "PENALIZAR"        # generado por corrutina de penalización
+ACCION_REINICIAR = "REINICIAR"        # reinicia el juego para una nueva partida
 
 
 # ---------------------------------------------------------------------------
@@ -168,6 +169,21 @@ def update(estado: EstadoJuego, tipo: str, payload: dict) -> EstadoJuego:
             ronda_activa=True,
             jugadores=tuple(replace(j, respondio_ronda_actual=False) for j in estado.jugadores),
             historial_eventos=estado.historial_eventos + (evento,),
+        )
+
+    if tipo == ACCION_REINICIAR:
+        # Reinicia el juego para una nueva partida, conservando los nombres/IDs
+        # de los jugadores ya conectados pero reseteando puntajes y progreso.
+        # El historial viejo y el ranking ya quedaron persistidos en la BD
+        # antes de llegar aqui (ver _persistir_fin_partida en server.py).
+        evento = f"[{_hora()}] 🔄 Nueva partida iniciada por un jugador."
+        jugadores_reiniciados = tuple(
+            replace(j, puntaje=0, respondio_ronda_actual=False, ultima_respuesta_ms=None)
+            for j in estado.jugadores
+        )
+        return EstadoJuego(
+            jugadores=jugadores_reiniciados,
+            historial_eventos=(evento,),
         )
 
     # Acción desconocida: por seguridad, no se muta nada.
