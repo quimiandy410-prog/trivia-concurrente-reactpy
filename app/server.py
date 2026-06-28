@@ -22,27 +22,13 @@ from starlette.applications import Starlette
 import estado as E
 import persistencia as P
 
-# ---------------------------------------------------------------------------
-# ESTADO GLOBAL COMPARTIDO EN MEMORIA
-# ---------------------------------------------------------------------------
-# Por que un Lock: varias corrutinas (humanas via evento de clic, y autonomas
-# via create_task) pueden intentar leer-modificar-escribir _estado_actual
-# en el mismo tick del Event Loop. asyncio.Lock asegura que cada
-# transicion update() se aplique de forma atomica, evitando "race conditions"
-# de lectura obsoleta (lost update) sin necesitar hilos.
 _lock = asyncio.Lock()
 _estado_actual = E.estado_inicial()
 _id_partida_actual = None
-_suscriptores = []  # callbacks de componentes ReactPy a notificar
+_suscriptores = []
 
 
 async def despachar(tipo, payload=None):
-    """
-    Unica funcion que aplica transiciones de estado.
-    1) Calcula el nuevo estado con la funcion PURA update().
-    2) Notifica a los componentes suscritos para re-renderizar.
-    Es async y usa Lock -> nunca bloquea ni corrompe el estado compartido.
-    """
     global _estado_actual
     payload = payload or {}
     async with _lock:
@@ -50,7 +36,6 @@ async def despachar(tipo, payload=None):
         _estado_actual = E.update(_estado_actual, tipo, payload)
         termino_ahora = (not anterior.juego_terminado) and _estado_actual.juego_terminado
 
-    # Notificar a la UI (fuera del lock, para no bloquear otras transiciones)
     for notificar in list(_suscriptores):
         notificar()
 
@@ -59,7 +44,6 @@ async def despachar(tipo, payload=None):
 
 
 async def _persistir_fin_partida():
-    """Disparado automaticamente cuando el estado indica fin de juego (evento de sistema)."""
     global _id_partida_actual
     snap = _estado_actual
     if not snap.jugadores:
@@ -74,33 +58,14 @@ async def _persistir_fin_partida():
         await P.registrar_evento(partida_id, evento_txt)
 
 
-# ---------------------------------------------------------------------------
-# CORRUTINA AUTONOMA #1: Temporizador global de rondas
-# ---------------------------------------------------------------------------
 async def temporizador_global():
-    """
-    Corrutina infinita e independiente del usuario.
-    Cada segundo emite un TICK que decrementa tiempo_restante en el estado.
-    Usa await asyncio.sleep() -> el Event Loop queda libre entre ticks,
-    permitiendo que otras corrutinas y clics de otros navegadores se procesen.
-    """
     while True:
         await asyncio.sleep(1)
         if not _estado_actual.juego_terminado:
             await despachar(E.ACCION_TICK, {})
 
 
-# ---------------------------------------------------------------------------
-# CORRUTINA AUTONOMA #2: Cierre automatico de rondas por inactividad
-# ---------------------------------------------------------------------------
 async def cierre_automatico_ronda():
-    """
-    Red de seguridad asincrona independiente: si pasan 2 segundos extra
-    despues de que el tiempo llego a 0 y la ronda sigue "activa" (caso borde
-    de UI lenta o cliente desconectado), fuerza el cierre y la penalizacion.
-    Esto es una corrutina DISTINTA del temporizador, demostrando 2 tareas
-    concurrentes que vigilan el mismo estado de forma independiente.
-    """
     while True:
         await asyncio.sleep(2)
         if (not _estado_actual.juego_terminado
@@ -109,16 +74,7 @@ async def cierre_automatico_ronda():
             await despachar(E.ACCION_CERRAR_RONDA, {})
 
 
-# ---------------------------------------------------------------------------
-# CORRUTINA AUTONOMA #3: Refresco periodico de recursos logicos del tablero
-# ---------------------------------------------------------------------------
 async def auditoria_periodica():
-    """
-    Cada 5 segundos registra un snapshot de auditoria en la BD de forma
-    NO bloqueante (await), incluso si nadie hizo clic en nada.
-    Esto cumple "la persistencia debe originarse de eventos del sistema,
-    no solo de acciones manuales".
-    """
     while True:
         await asyncio.sleep(5)
         if _estado_actual.jugadores and not _estado_actual.juego_terminado:
@@ -127,16 +83,10 @@ async def auditoria_periodica():
                 f"pregunta #{_estado_actual.pregunta_idx + 1}, "
                 f"tiempo restante {_estado_actual.tiempo_restante}s"
             )
-            # Persistencia disparada por el SISTEMA, no por el usuario:
             await P.registrar_evento(_id_partida_actual or 0, descripcion)
 
 
 async def iniciar_corrutinas_autonomas():
-    """
-    Lanza las 3 corrutinas autonomas obligatorias con asyncio.create_task()
-    para que corran en paralelo lógico al servidor, y las agrupa con
-    asyncio.gather() para que el ciclo de vida del proceso las espere.
-    """
     tareas = [
         asyncio.create_task(temporizador_global()),
         asyncio.create_task(cierre_automatico_ronda()),
@@ -145,13 +95,8 @@ async def iniciar_corrutinas_autonomas():
     await asyncio.gather(*tareas)
 
 
-# ---------------------------------------------------------------------------
-# COMPONENTES REACTPY (funciones puras de render -> arboles virtuales)
-# ---------------------------------------------------------------------------
-
 @component
 def Cronometro():
-    """Muestra el tiempo restante. Se re-renderiza via suscripcion al estado."""
     _, forzar_render = use_state(0)
 
     def suscribirse():
@@ -172,7 +117,6 @@ def Cronometro():
 
 @component
 def Pregunta(jugador_id):
-    """Muestra la pregunta actual y los botones de respuesta (acciones humanas)."""
     _, forzar_render = use_state(0)
 
     def suscribirse():
@@ -247,15 +191,78 @@ def TablaPuntajes():
 
 
 @component
+def HistorialEventos():
+    _, forzar_render = use_state(0)
+
+    def suscribirse():
+        def notificar():
+            forzar_render(lambda n: n + 1)
+        _suscriptores.append(notificar)
+        return lambda: _suscriptores.remove(notificar)
+
+    use_effect(suscribirse, [])
+
+    eventos = list(reversed(_estado_actual.historial_eventos[-8:]))
+    items = [html.li({"key": str(i)}, ev) for i, ev in enumerate(eventos)]
+
+    return html.div(
+        {"style": {"marginTop": "1.5rem", "backgroundColor": "#f5f5f5", "padding": "10px", "borderRadius": "8px"}},
+        html.h4("📜 Historial de eventos (últimos 8)"),
+        html.ul({"style": {"fontSize": "0.85rem"}}, items) if items else html.p("Sin eventos aún."),
+    )
+
+
+@component
+def RankingGlobal():
+    ranking, set_ranking = use_state([])
+
+    def cargar_ranking():
+        async def consultar():
+            datos = await P.obtener_ranking_top(10)
+            set_ranking(datos)
+        asyncio.ensure_future(consultar())
+
+    use_effect(cargar_ranking, [])
+
+    filas = [
+        html.tr(
+            {"key": r["nombre"] + str(i)},
+            html.td(f"#{i + 1}"),
+            html.td(r["nombre"]),
+            html.td(str(r["puntaje"])),
+            html.td(str(r["partidas"])),
+        )
+        for i, r in enumerate(ranking)
+    ]
+
+    return html.div(
+        {"style": {"marginTop": "2rem", "borderTop": "2px solid #ccc", "paddingTop": "1rem"}},
+        html.h3("🏆 Ranking Global Histórico"),
+        html.table(
+            {"style": {"width": "100%", "borderCollapse": "collapse"}},
+            html.thead(
+                html.tr(
+                    html.th("Pos."), html.th("Jugador"), html.th("Puntaje Acumulado"), html.th("Partidas")
+                )
+            ),
+            html.tbody(filas),
+        ) if ranking else html.p("Aún no hay partidas registradas en el ranking."),
+    )
+
+
+@component
 def App():
     jugador_id, set_jugador_id = use_state(None)
     nombre_input, set_nombre_input = use_state("")
 
-    async def iniciar_corrutinas_una_vez():
-        # Lanza las corrutinas autonomas solo una vez (al primer montaje de App)
+    def iniciar_corrutinas_una_vez():
         asyncio.create_task(iniciar_corrutinas_autonomas())
 
-    use_effect(lambda: asyncio.ensure_future(iniciar_corrutinas_una_vez()), [])
+    def efecto():
+        iniciar_corrutinas_una_vez()
+        return None
+
+    use_effect(efecto, [])
 
     if jugador_id is None:
         def manejar_input(e):
@@ -290,12 +297,10 @@ def App():
         Cronometro(),
         Pregunta(jugador_id),
         TablaPuntajes(),
+        HistorialEventos(),
+        RankingGlobal(),
     )
 
-
-# ---------------------------------------------------------------------------
-# ARRANQUE DEL SERVIDOR
-# ---------------------------------------------------------------------------
 
 app = Starlette()
 configure(app, App)
