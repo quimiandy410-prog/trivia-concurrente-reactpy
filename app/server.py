@@ -35,17 +35,21 @@ async def despachar(tipo, payload=None):
         anterior = _estado_actual
         _estado_actual = E.update(_estado_actual, tipo, payload)
         termino_ahora = (not anterior.juego_terminado) and _estado_actual.juego_terminado
+        # Capturamos el snapshot AQUI MISMO, dentro del lock, en el instante exacto
+        # en que termino la partida. Como EstadoJuego es inmutable (frozen=True),
+        # esta referencia nunca cambia aunque _estado_actual se reasigne despues
+        # (por ejemplo, si el usuario presiona "Jugar de nuevo" casi al instante).
+        snapshot_final = _estado_actual if termino_ahora else None
 
     for notificar in list(_suscriptores):
         notificar()
 
     if termino_ahora:
-        asyncio.create_task(_persistir_fin_partida())
+        asyncio.create_task(_persistir_fin_partida(snapshot_final))
 
 
-async def _persistir_fin_partida():
+async def _persistir_fin_partida(snap):
     global _id_partida_actual
-    snap = _estado_actual
     if not snap.jugadores:
         return
     ganador_obj = max(snap.jugadores, key=lambda j: j.puntaje)
@@ -116,7 +120,7 @@ def Cronometro():
 
 
 @component
-def Pregunta(jugador_id):
+def Pregunta(jugador_id, volver_a_ingresar_nombre):
     _, forzar_render = use_state(0)
 
     def suscribirse():
@@ -131,8 +135,12 @@ def Pregunta(jugador_id):
         ganador = max(_estado_actual.jugadores, key=lambda j: j.puntaje, default=None)
         texto_ganador = f"🏆 Ganador: {ganador.nombre} ({ganador.puntaje} pts)" if ganador else "Sin jugadores"
 
-        async def reiniciar(_event):
-            await despachar(E.ACCION_REINICIAR, {})
+        def reiniciar(_event):
+            # Solo regresa a ESTE jugador a la pantalla de nombre.
+            # El estado del servidor (ACCION_REINICIAR) se dispara recien
+            # cuando confirme "Unirse" con el nombre nuevo, para no
+            # interrumpir a otros jugadores que aun esten viendo el resultado.
+            volver_a_ingresar_nombre()
 
         return html.div(
             {"style": {"fontSize": "1.5rem", "textAlign": "center"}},
@@ -278,6 +286,13 @@ def App():
             set_nombre_input(e["target"]["value"])
 
         async def unirse(_event):
+            # Si la partida anterior ya termino, la reiniciamos justo aqui,
+            # en el momento en que alguien confirma que quiere jugar de
+            # nuevo con un nombre nuevo (no apenas se presiono el boton
+            # "Jugar de nuevo", para no interrumpir a otros que aun esten
+            # viendo el resultado final).
+            if _estado_actual.juego_terminado:
+                await despachar(E.ACCION_REINICIAR, {})
             nuevo_id = f"j_{int(time.time() * 1000)}"
             await despachar(E.ACCION_UNIRSE, {"id": nuevo_id, "nombre": nombre_input or "Jugador"})
             set_jugador_id(nuevo_id)
@@ -304,7 +319,7 @@ def App():
         {"style": {"maxWidth": "600px", "margin": "30px auto", "fontFamily": "sans-serif"}},
         html.h2("🎮 Trivia Concurrente"),
         Cronometro(),
-        Pregunta(jugador_id),
+        Pregunta(jugador_id, lambda: set_jugador_id(None)),
         TablaPuntajes(),
         HistorialEventos(),
         RankingGlobal(),
